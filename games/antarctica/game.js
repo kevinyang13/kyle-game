@@ -286,7 +286,7 @@ function darkness() {
 function newGame() {
   genMap();
   Object.assign(game, { time: DAY * 0.05, ents: [], arrows: [], items: [], parts: [], flyIce: [], nets: [], toasts: [], smoke: [], shake: 0, dishTimer: 0, spawnT: 5, hunted: 0, cause: '' });
-  player = { ...center(CAB.x + 6, CAB.y + 4), r: 12, hp: 100, hunger: 100, warmth: 100, aim: 0, cool: 0, invuln: 0, sitting: null, walk: 0 };
+  player = { ...center(CAB.x + 6, CAB.y + 4), r: 12, hp: 100, hunger: 100, warmth: 100, aim: 0, cool: 0, invuln: 0, sitting: null, walk: 0, weapon: 'bow', power: false, swing: 0 };
   inv = { raw: 3, cooked: 0, ice: 0, fish: 0 }; // start with a few penguins for food
   for (let i = 0; i < 4; i++) spawn('penguin', { minCab: 8, maxCab: 14 });
   for (const type in STATS) for (let i = 0; i < 40 && count(type) < target(type); i++) spawn(type);
@@ -321,8 +321,43 @@ function hurt(n, cause) {
 function shoot() {
   const p = player;
   p.sitting = null;
-  p.cool = 0.45;
-  game.arrows.push({ x: p.x + Math.cos(p.aim) * 14, y: p.y + Math.sin(p.aim) * 14, vx: Math.cos(p.aim) * 650, vy: Math.sin(p.aim) * 650, life: 0.9 });
+  // power shot: shorter range, hits harder, slower to reload
+  const pw = p.power;
+  p.cool = pw ? 0.8 : 0.45;
+  game.arrows.push({ x: p.x + Math.cos(p.aim) * 14, y: p.y + Math.sin(p.aim) * 14, vx: Math.cos(p.aim) * 650, vy: Math.sin(p.aim) * 650, life: pw ? 0.35 : 0.9, dmg: pw ? 3 : 1, power: pw });
+}
+
+function hitEnt(e, dmg, x, y) {
+  e.hit = 0.2;
+  e.angry = true;
+  puff(x, y, '#ffffff', 5);
+  e.hp -= dmg;
+  if (e.hp <= 0) kill(e);
+}
+
+function swingSword() {
+  const p = player;
+  p.sitting = null;
+  p.cool = 0.4;
+  p.swing = 0.25;
+  for (const e of game.ents) {
+    if (e.dead) continue;
+    const d = dist(e, p);
+    if (d - e.r > 46) continue;
+    let da = Math.atan2(e.y - p.y, e.x - p.x) - p.aim;
+    da = Math.atan2(Math.sin(da), Math.cos(da));
+    if (Math.abs(da) < 1.2 || d < e.r + 14) hitEnt(e, 2, e.x, e.y - e.z);
+  }
+}
+
+function toggleSword() {
+  player.weapon = player.weapon === 'sword' ? 'bow' : 'sword';
+  toast(player.weapon === 'sword' ? '⚔️ Sword! Click to swing — close range, 2 damage.' : '🏹 Bow ready.');
+}
+function togglePower() {
+  player.power = !player.power;
+  if (player.weapon !== 'bow') player.weapon = 'bow';
+  toast(player.power ? '🏹 Power shot: shorter range, 3 damage, slower reload.' : '🏹 Normal shot: long range.');
 }
 
 function eat() {
@@ -462,6 +497,8 @@ addEventListener('keydown', e => {
   else if (k === 'f') { if (nearLake()) placeNet(); else eat(); }
   else if (k === 't') eat();
   else if (k === 'r') checkNet();
+  else if (k === 'x') toggleSword();
+  else if (k === 'c') togglePower();
   else if (k === 'g') grabNet();
   else if (k === 'q') placeIce();
 });
@@ -494,7 +531,8 @@ function updatePlayer(dt) {
   p.aim = Math.atan2(m.y - p.y, m.x - p.x);
   p.cool -= dt;
   p.invuln -= dt;
-  if (mouse.down && p.cool <= 0) shoot();
+  p.swing -= dt;
+  if (mouse.down && p.cool <= 0) { if (p.weapon === 'sword') swingSword(); else shoot(); }
 }
 
 function updateSurvival(dt) {
@@ -519,11 +557,7 @@ function updateArrows(dt) {
     for (const e of game.ents) {
       if (e.dead || Math.hypot(e.x - a.x, e.y - e.z - a.y) > e.r + 4) continue;
       a.dead = true;
-      e.hp--;
-      e.hit = 0.2;
-      e.angry = true;
-      puff(a.x, a.y, '#ffffff', 5);
-      if (e.hp <= 0) kill(e);
+      hitEnt(e, a.dmg, a.x, a.y);
       break;
     }
   }
@@ -895,8 +929,20 @@ function drawPlayer() {
   ctx.fillStyle = '#222';
   const ex = Math.cos(p.aim) * 2, ey = Math.sin(p.aim) * 2;
   circle(-2.2 + ex, -3 + ey, 1.2); circle(2.2 + ex, -3 + ey, 1.2);
-  // bow
   ctx.rotate(p.aim);
+  if (p.weapon === 'sword') {
+    const sw = p.swing > 0 ? (1 - p.swing / 0.25) * 2.4 - 1.2 : -0.5; // blade sweeps across the front
+    ctx.rotate(sw);
+    ctx.fillStyle = '#6b4423'; ctx.fillRect(8, -2, 8, 4);
+    ctx.fillStyle = '#d4a017'; ctx.fillRect(14, -6, 3, 12);
+    ctx.fillStyle = '#cfd8dc'; ctx.fillRect(17, -2.5, 28, 5);
+    ctx.fillStyle = '#fff'; ctx.fillRect(17, -2.5, 28, 1.5);
+    ctx.beginPath(); ctx.moveTo(45, -2.5); ctx.lineTo(51, 0); ctx.lineTo(45, 2.5); ctx.fillStyle = '#cfd8dc'; ctx.fill();
+    if (p.swing > 0) { ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(0, 0, 42, -1.4, 0.2); ctx.stroke(); }
+    ctx.restore();
+    return;
+  }
+  // bow
   ctx.strokeStyle = '#7a4a22'; ctx.lineWidth = 3;
   ctx.beginPath(); ctx.arc(8, 0, 14, -1.1, 1.1); ctx.stroke();
   const pull = p.cool > 0.2 ? 0 : 5;
@@ -923,8 +969,9 @@ function drawArrow(a) {
   ctx.beginPath(); ctx.moveTo(-12, 0); ctx.lineTo(10, 0); ctx.stroke();
   ctx.fillStyle = '#9e9e9e';
   ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(9, -3); ctx.lineTo(9, 3); ctx.fill();
-  ctx.fillStyle = '#e53935';
+  ctx.fillStyle = a.power ? '#ff9800' : '#e53935';
   ctx.fillRect(-13, -3, 5, 2); ctx.fillRect(-13, 1, 5, 2);
+  if (a.power) { ctx.strokeStyle = 'rgba(255,152,0,.5)'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(-26, 0); ctx.lineTo(-12, 0); ctx.stroke(); }
   ctx.restore();
 }
 
@@ -1001,6 +1048,10 @@ function drawUI() {
   ctx.beginPath(); ctx.roundRect(12, 112, 190, 28, 6); ctx.fill();
   ctx.font = '16px sans-serif'; ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
   ctx.fillText(`🥩 ${inv.raw}  🐟 ${inv.fish}  🍖 ${inv.cooked}  🧊 ${inv.ice}`, 20, 132);
+  ctx.fillStyle = 'rgba(0,0,0,.45)';
+  ctx.beginPath(); ctx.roundRect(12, 146, 190, 26, 6); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.fillText(p.weapon === 'sword' ? '⚔️ Sword' : p.power ? '🏹 Bow — power shot' : '🏹 Bow', 20, 164);
 
   const night = darkness() > 0.3;
   ctx.textAlign = 'right'; ctx.font = 'bold 20px sans-serif';
@@ -1036,8 +1087,8 @@ function drawUI() {
   });
 
   ctx.font = '13px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(255,255,255,.85)';
-  ctx.strokeText('WASD move · Click shoot · E use/pull ice · Right-click place ice · T eat · F net · R check · G grab', 12, H - 14);
-  ctx.fillText('WASD move · Click shoot · E use/pull ice · Right-click place ice · T eat · F net · R check · G grab', 12, H - 14);
+  ctx.strokeText('WASD move · Click shoot · E use/pull ice · Right-click place ice · X sword · C power shot · T eat · F net · R check · G grab', 12, H - 14);
+  ctx.fillText('WASD move · Click shoot · E use/pull ice · Right-click place ice · X sword · C power shot · T eat · F net · R check · G grab', 12, H - 14);
 
   // arrow pointing home when the cabin is off-screen
   const cx = CAB_CENTER.x - cam.x, cy = CAB_CENTER.y - cam.y;
@@ -1148,6 +1199,7 @@ function draw() {
       'WASD / arrows — move      Mouse — aim      Click — shoot bow',
       'E — pull ice, cook at the fire, sit, run dishwasher',
       'Right-click or Q — place an ice block (build walls!)',
+      'X — sword (close range)     C — power shot (short, strong)',
       'T — eat food. Stay warm inside the log cabin.',
       'F at the lake — fishing net · R check it · G grab it, then cook the fish',
       '⚠️ Polar bears & narwhals hurt you only when they JUMP. Dodge!',
