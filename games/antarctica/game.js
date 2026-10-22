@@ -266,7 +266,7 @@ function kill(e) {
 }
 
 // ---------- game state ----------
-const game = { mode: 'title', time: 0, ents: [], arrows: [], items: [], parts: [], flyIce: [], toasts: [], smoke: [], shake: 0, dishTimer: 0, spawnT: 0, smokeT: 0, hunted: 0, cause: '', deadT: 0 };
+const game = { mode: 'title', time: 0, ents: [], arrows: [], items: [], parts: [], flyIce: [], nets: [], toasts: [], smoke: [], shake: 0, dishTimer: 0, spawnT: 0, smokeT: 0, hunted: 0, cause: '', deadT: 0 };
 let player, inv;
 const cam = { x: 0, y: 0 };
 const mouse = { x: 0, y: 0, down: false };
@@ -285,9 +285,9 @@ function darkness() {
 
 function newGame() {
   genMap();
-  Object.assign(game, { time: DAY * 0.05, ents: [], arrows: [], items: [], parts: [], flyIce: [], toasts: [], smoke: [], shake: 0, dishTimer: 0, spawnT: 5, hunted: 0, cause: '' });
+  Object.assign(game, { time: DAY * 0.05, ents: [], arrows: [], items: [], parts: [], flyIce: [], nets: [], toasts: [], smoke: [], shake: 0, dishTimer: 0, spawnT: 5, hunted: 0, cause: '' });
   player = { ...center(CAB.x + 6, CAB.y + 4), r: 12, hp: 100, hunger: 100, warmth: 100, aim: 0, cool: 0, invuln: 0, sitting: null, walk: 0 };
-  inv = { raw: 3, cooked: 0, ice: 0 }; // start with a few penguins for food
+  inv = { raw: 3, cooked: 0, ice: 0, fish: 0 }; // start with a few penguins for food
   for (let i = 0; i < 4; i++) spawn('penguin', { minCab: 8, maxCab: 14 });
   for (const type in STATS) for (let i = 0; i < 40 && count(type) < target(type); i++) spawn(type);
   game.mode = 'play';
@@ -365,18 +365,76 @@ function placeIce() {
   puff(c.x, c.y, '#d5f2ff', 8);
 }
 
+// ---------- fishing nets ----------
+const MAX_NETS = 3;
+const netOk = (tx, ty) => {
+  const t = getTile(tx, ty);
+  return (t === T.SNOW || t === T.WATER) && hasNear(tx, ty, 2, T.WATER) && !game.nets.some(n => n.tx === tx && n.ty === ty);
+};
+const nearLake = () => hasNear(Math.floor(player.x / TS), Math.floor(player.y / TS), 2, T.WATER);
+
+// Tile ahead of you first, then the one you stand on, then the ones around you.
+function netSpot() {
+  const p = player, ptx = Math.floor(p.x / TS), pty = Math.floor(p.y / TS);
+  const aheadX = Math.floor((p.x + Math.cos(p.aim) * TS) / TS), aheadY = Math.floor((p.y + Math.sin(p.aim) * TS) / TS);
+  const spots = [[aheadX, aheadY], [ptx, pty]];
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) spots.push([ptx + dx, pty + dy]);
+  for (const [tx, ty] of spots) if (netOk(tx, ty)) return { tx, ty };
+  return null;
+}
+
+function placeNet() {
+  if (game.nets.length >= MAX_NETS) return toast(`You can only have ${MAX_NETS} nets out. Grab one with G.`);
+  const spot = netSpot();
+  if (!spot) return toast('No place for a net here. Stand next to the water!');
+  const c = center(spot.tx, spot.ty);
+  const fish = Array.from({ length: 5 }, () => ({ a: rand(0, 6.28), r: rand(40, 110), s: rand(0.4, 1) * (Math.random() < 0.5 ? 1 : -1) }));
+  game.nets.push({ ...c, ...spot, fish, caught: 0, t: rand(5, 9) });
+  puff(c.x, c.y, '#d5f2ff', 8);
+  toast('Net is out! More fish will swim by. R = check, G = grab it.');
+}
+
+function nearestNet(r) {
+  let best = null;
+  for (const n of game.nets) if (dist(player, n) < r && (!best || dist(player, n) < dist(player, best))) best = n;
+  return best;
+}
+function checkNet() {
+  const n = nearestNet(130);
+  if (!n) return toast('No net nearby. Press F at the water to put one down.');
+  toast(n.caught > 0 ? `🐟 ${n.caught} fish on the stick! Press G to grab it.` : 'No fish yet… wait a little. 🎣');
+}
+function grabNet() {
+  const n = nearestNet(110);
+  if (!n) return toast('No net close enough to grab.');
+  game.nets.splice(game.nets.indexOf(n), 1);
+  inv.fish += n.caught;
+  puff(n.x, n.y, '#d5f2ff', 10);
+  if (n.caught > 0) { floatText(player.x, player.y - 20, `+${n.caught} 🐟`); toast(`Got ${n.caught} fish! Cook them at the fire (E).`); }
+  else toast('Pulled the net in. It was empty.');
+}
+
+function updateNets(dt) {
+  for (const n of game.nets) {
+    for (const f of n.fish) f.a += f.s * dt;
+    n.t -= dt;
+    if (n.t <= 0) { n.t = rand(8, 14); if (n.caught < 4) { n.caught++; puff(n.x, n.y, '#bfe6ff', 8); } }
+  }
+}
+
 function cook() {
-  const n = inv.raw;
+  const n = inv.raw + inv.fish;
   inv.raw = 0;
+  inv.fish = 0;
   inv.cooked += n;
   puff(player.x, player.y - 10, '#ffb347', 12);
-  toast(`Cooked ${n} meat 🍖  (press F to eat)`);
+  toast(`Cooked ${n} food 🍖  (press T to eat)`);
 }
 
 function findAction() {
   const p = player;
   if (p.sitting) return { label: 'Stand up', run() { p.sitting = null; } };
-  if (inv.raw > 0 && (dist(p, FIRE_POS) < 95 || dist(p, STOVE_POS) < 55)) return { label: `Cook ${inv.raw} raw meat`, run: cook };
+  if (inv.raw + inv.fish > 0 && (dist(p, FIRE_POS) < 95 || dist(p, STOVE_POS) < 55)) return { label: `Cook ${inv.raw + inv.fish} raw food`, run: cook };
   if (dist(p, DISH_POS) < 60) return {
     label: game.dishTimer > 0 ? 'Dishwasher is running…' : 'Run the dishwasher',
     run() {
@@ -401,7 +459,10 @@ addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (game.mode !== 'play') { if (k === ' ' || k === 'enter') startGame(); return; }
   if (k === 'e') findAction()?.run();
-  else if (k === 'f') eat();
+  else if (k === 'f') { if (nearLake()) placeNet(); else eat(); }
+  else if (k === 't') eat();
+  else if (k === 'r') checkNet();
+  else if (k === 'g') grabNet();
   else if (k === 'q') placeIce();
 });
 canvas.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
@@ -525,6 +586,7 @@ function update(dt) {
     updatePlayer(dt);
     updateEnts(dt);
     updateArrows(dt);
+    updateNets(dt);
     updateWorld(dt);
     updateSurvival(dt);
   } else if (game.mode === 'dead') game.deadT += dt;
@@ -866,6 +928,40 @@ function drawArrow(a) {
   ctx.restore();
 }
 
+function drawFish(x, y, ang, sz) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(ang);
+  ctx.fillStyle = '#ffa94d';
+  ellipse(0, 0, sz, sz * 0.5);
+  ctx.beginPath(); ctx.moveTo(-sz * 0.8, 0); ctx.lineTo(-sz * 1.5, -sz * 0.5); ctx.lineTo(-sz * 1.5, sz * 0.5); ctx.fill();
+  ctx.fillStyle = '#000'; circle(sz * 0.5, -sz * 0.1, sz * 0.12);
+  ctx.restore();
+}
+
+function drawNet(n) {
+  // fish swimming around the net, only over water
+  ctx.globalAlpha = 0.85;
+  for (const f of n.fish) {
+    const fx = n.x + Math.cos(f.a) * f.r, fy = n.y + Math.sin(f.a) * f.r * 0.7;
+    if (tileAt(fx, fy) !== T.WATER) continue;
+    drawFish(fx, fy, f.a + (f.s > 0 ? Math.PI / 2 : -Math.PI / 2), 7);
+  }
+  ctx.globalAlpha = 1;
+  const bob = Math.sin(game.time * 3 + n.x) * 1.5;
+  ctx.strokeStyle = '#6b4423'; ctx.lineWidth = 3; // the stick
+  ctx.beginPath(); ctx.moveTo(n.x, n.y + 14); ctx.lineTo(n.x, n.y - 20 + bob); ctx.stroke();
+  ctx.fillStyle = 'rgba(210,225,235,.25)'; // the net
+  ctx.fillRect(n.x - 12, n.y - 12 + bob, 24, 24);
+  ctx.strokeStyle = '#e8eef3'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = -12; i <= 12; i += 6) { ctx.moveTo(n.x + i, n.y - 12 + bob); ctx.lineTo(n.x + i, n.y + 12 + bob); ctx.moveTo(n.x - 12, n.y + i + bob); ctx.lineTo(n.x + 12, n.y + i + bob); }
+  ctx.stroke();
+  ctx.strokeRect(n.x - 12, n.y - 12 + bob, 24, 24);
+  for (let i = 0; i < n.caught; i++) drawFish(n.x - 8 + i * 6, n.y - 4 + bob, Math.sin(game.time * 12 + i) * 0.5 - Math.PI / 2, 6);
+  if (n.caught > 0) { ctx.fillStyle = '#ffd54f'; ctx.font = 'bold 20px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('!', n.x, n.y - 26 + bob); }
+}
+
 const DRAW = { penguin: drawPenguin, seal: drawSeal, petrel: drawPetrel, bear: drawBear, narwhal: drawNarwhal };
 
 // ---------- drawing: lighting & UI ----------
@@ -904,7 +1000,7 @@ function drawUI() {
   ctx.fillStyle = 'rgba(0,0,0,.45)';
   ctx.beginPath(); ctx.roundRect(12, 112, 190, 28, 6); ctx.fill();
   ctx.font = '16px sans-serif'; ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
-  ctx.fillText(`🥩 ${inv.raw}   🍖 ${inv.cooked}   🧊 ${inv.ice}`, 20, 132);
+  ctx.fillText(`🥩 ${inv.raw}  🐟 ${inv.fish}  🍖 ${inv.cooked}  🧊 ${inv.ice}`, 20, 132);
 
   const night = darkness() > 0.3;
   ctx.textAlign = 'right'; ctx.font = 'bold 20px sans-serif';
@@ -929,7 +1025,10 @@ function drawUI() {
   if (action) hints.push(`[E] ${action.label}`);
   if (placeTarget()) hints.push('[Right-click / Q] Place ice block');
   if (p.warmth < 25) hints.push('🥶 You\'re freezing! Get to the cabin fire!');
-  if (p.hunger < 20) hints.push('😫 You\'re starving! Press F to eat.');
+  if (p.hunger < 20) hints.push('😫 You\'re starving! Press T to eat.');
+  if (nearLake() && game.nets.length < MAX_NETS && netSpot()) hints.push('[F] Put down a fishing net');
+  const hn = nearestNet(110);
+  if (hn) hints.push(hn.caught > 0 ? `[G] Grab the net — ${hn.caught} 🐟!` : '[R] Check the net');
   ctx.font = 'bold 18px sans-serif';
   hints.forEach((h, i) => {
     const y = H - 70 - i * 28;
@@ -937,8 +1036,8 @@ function drawUI() {
   });
 
   ctx.font = '13px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(255,255,255,.85)';
-  ctx.strokeText('WASD move · Click shoot · E use/pull ice · Right-click place ice · F eat', 12, H - 14);
-  ctx.fillText('WASD move · Click shoot · E use/pull ice · Right-click place ice · F eat', 12, H - 14);
+  ctx.strokeText('WASD move · Click shoot · E use/pull ice · Right-click place ice · T eat · F net · R check · G grab', 12, H - 14);
+  ctx.fillText('WASD move · Click shoot · E use/pull ice · Right-click place ice · T eat · F net · R check · G grab', 12, H - 14);
 
   // arrow pointing home when the cabin is off-screen
   const cx = CAB_CENTER.x - cam.x, cy = CAB_CENTER.y - cam.y;
@@ -1000,6 +1099,7 @@ function draw() {
     if (pt) { ctx.globalAlpha = 0.45; drawIceBlock(pt.tx * TS, pt.ty * TS); ctx.globalAlpha = 1; }
   }
 
+  for (const n of game.nets) drawNet(n);
   for (const it of game.items) {
     ctx.font = '20px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('🥩', it.x, it.y + 7 + Math.sin(game.time * 4 + it.bob) * 2);
@@ -1048,7 +1148,8 @@ function draw() {
       'WASD / arrows — move      Mouse — aim      Click — shoot bow',
       'E — pull ice, cook at the fire, sit, run dishwasher',
       'Right-click or Q — place an ice block (build walls!)',
-      'F — eat food. Stay warm inside the log cabin.',
+      'T — eat food. Stay warm inside the log cabin.',
+      'F at the lake — fishing net · R check it · G grab it, then cook the fish',
       '⚠️ Polar bears & narwhals hurt you only when they JUMP. Dodge!',
       '',
       'Click to start',
