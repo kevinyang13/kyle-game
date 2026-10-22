@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kyle's Games</title>
+  <style>
+    body { font-family: sans-serif; background: #1b1f2a; color: #fff; padding: 2rem; }
+    a { color: #8fd18f; font-size: 1.5rem; display: block; margin: .5rem 0; }
+  </style>
+</head>
+<body>
+  <h1>Kyle's Games</h1>
+  <div id="list">No games yet.</div>
+  <script>
+    fetch('games/games.json').then(r => r.json()).then(games => {
+      if (!games.length) return;
+      document.getElementById('list').innerHTML =
+        games.map(g => `<a href="games/${g.id}/">${g.title}</a>`).join('');
+    });
+  </script>
+</body>
+</html>
